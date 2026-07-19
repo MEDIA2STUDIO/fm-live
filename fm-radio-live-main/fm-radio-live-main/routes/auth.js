@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { getDb } = require('../database');
 const { JWT_SECRET, verifyToken } = require('../middleware/auth');
-const { isSessionAlive, touchSession, removeSession } = require('../session-store');
+const { isSessionAlive, setSession, removeSession, validateSession } = require('../session-store');
 
 const router = express.Router();
 
@@ -37,7 +37,8 @@ router.post('/signup', async (req, res) => {
       { expiresIn: '7d' }
     );
 
-    res.cookie('token', token, { httpOnly: true, sameSite: 'lax' });
+    setSession(String(userId), token);
+    res.cookie('token', token, { httpOnly: true, sameSite: 'lax', path: '/' });
     res.json({ success: true, token, user: { id: userId, username, role: 'broadcaster' } });
   } catch (error) {
     console.error('Signup error:', error.message, error.stack);
@@ -68,21 +69,14 @@ router.post('/login', async (req, res) => {
       return res.status(403).json({ error: 'Account is disabled' });
     }
 
-    if (user.role !== 'admin' && isSessionAlive(String(user.id))) {
-      return res.status(409).json({ error: 'Already logged in from another browser. Close that session first.' });
-    }
-
     const token = jwt.sign(
       { id: user.id, username: user.username, role: user.role },
       JWT_SECRET,
       { expiresIn: '7d' }
     );
 
-    if (user.role !== 'admin') {
-      touchSession(String(user.id), token);
-    }
-
-    res.cookie('token', token, { httpOnly: true, sameSite: 'lax' });
+    setSession(String(user.id), token);
+    res.cookie('token', token, { httpOnly: true, sameSite: 'lax', path: '/' });
     res.json({
       success: true,
       token,
@@ -99,12 +93,10 @@ router.post('/logout', (req, res) => {
   if (token) {
     try {
       const decoded = jwt.verify(token, JWT_SECRET);
-      if (decoded.role !== 'admin') {
-        removeSession(String(decoded.id));
-      }
+      removeSession(String(decoded.id));
     } catch (_) {}
   }
-  res.clearCookie('token');
+  res.clearCookie('token', { httpOnly: true, sameSite: 'lax', path: '/' });
   res.json({ success: true });
 });
 
@@ -113,10 +105,15 @@ router.get('/me', verifyToken, async (req, res) => {
     const db = await getDb();
     const user = db.get('SELECT id, username, email, display_name, location, role, is_live FROM users WHERE id = ?', [req.user.id]);
     if (!user) {
-      return res.status(404).json({ error: 'User not found' });
+      removeSession(String(req.user.id));
+      return res.clearCookie('token').status(404).json({ error: 'User not found' });
     }
     if (user.role !== 'admin') {
-      touchSession(String(user.id), req.token);
+      const valid = validateSession(String(user.id), req.token);
+      if (!valid) {
+        res.clearCookie('token', { httpOnly: true, sameSite: 'lax', path: '/' });
+        return res.status(401).json({ error: 'Session expired. Login again.' });
+      }
     }
     res.json({ user });
   } catch (error) {
