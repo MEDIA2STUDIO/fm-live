@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { getDb } = require('../database');
 const { JWT_SECRET, verifyToken } = require('../middleware/auth');
-const { isSessionAlive, setSession, removeSession } = require('../session-store');
+const { setSession, removeSession, getSessionToken } = require('../session-store');
 
 const router = express.Router();
 
@@ -69,8 +69,16 @@ router.post('/login', async (req, res) => {
       return res.status(403).json({ error: 'Account is disabled' });
     }
 
-    if (user.role !== 'admin' && isSessionAlive(String(user.id))) {
-      return res.status(409).json({ error: 'Already logged in from another browser. Close that session first.' });
+    if (user.role !== 'admin') {
+      const oldToken = getSessionToken(String(user.id));
+      if (oldToken) {
+        try {
+          jwt.verify(oldToken, JWT_SECRET);
+          return res.status(409).json({ error: 'Already logged in from another browser. Close that session first.' });
+        } catch (_) {
+          removeSession(String(user.id));
+        }
+      }
     }
 
     const token = jwt.sign(

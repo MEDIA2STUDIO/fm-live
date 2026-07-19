@@ -12,4 +12,8 @@ function removeSession(userId) {
   activeSessions.delete(userId);
 }
 
-module.exports = { isSessionAlive, setSession, removeSession };
+function getSessionToken(userId) {
+  return activeSessions.get(userId);
+}
+
+module.exports = { isSessionAlive, setSession, removeSession, getSessionToken };
